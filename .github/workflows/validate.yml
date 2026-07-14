@@ -34,6 +34,10 @@ jobs:
         run: bicep build bicep/main.bicep
       - name: Bicep lint
         run: bicep lint bicep/main.bicep
+      - name: Bicep retirement module build
+        run: bicep build bicep/modules/retirementAutomation.bicep
+      - name: Bicep retirement module lint
+        run: bicep lint bicep/modules/retirementAutomation.bicep
 
   powershell:
     runs-on: ubuntu-latest
@@ -61,6 +65,28 @@ jobs:
             throw 'PSScriptAnalyzer reported findings.'
           }
 
+  pester:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -Scope CurrentUser -Force -MinimumVersion 5.0.0
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
   repository-checks:
     runs-on: ubuntu-latest
     steps:
@@ -77,3 +103,6 @@ jobs:
           test -f terraform/environments/example/main.tf
           test -f bicep/main.bicep
           test -f scripts/Resolve-AvdGalleryImageVersion.ps1
+          test -f scripts/Invoke-AvdAutoRetirement.ps1
+          test -f tests/Invoke-AvdAutoRetirement.Tests.ps1
+

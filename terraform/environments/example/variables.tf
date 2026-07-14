@@ -219,3 +219,95 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ---------------------------------------------------------------------------
+# Automated retirement (opt-in)
+# ---------------------------------------------------------------------------
+
+variable "enable_retirement_automation" {
+  description = "Set to true to deploy the Azure Automation Account and retirement runbook for the old generation."
+  type        = bool
+  default     = false
+}
+
+variable "retirement_automation_account_name" {
+  description = "Name for the Azure Automation Account used by the retirement runbook. Required when enable_retirement_automation is true."
+  type        = string
+  default     = null
+}
+
+variable "retirement_automation_resource_group_name" {
+  description = "Resource group that will contain the retirement Automation Account. Defaults to control_plane_resource_group_name."
+  type        = string
+  default     = null
+}
+
+variable "enable_automatic_retirement" {
+  description = "Opt-in gate: set to true to activate the scheduled retirement runbook. Disabled by default."
+  type        = bool
+  default     = false
+}
+
+variable "retirement_generation_name" {
+  description = "Generation name of the old hosts to retire, e.g. g2407. Required when enable_retirement_automation is true."
+  type        = string
+  default     = null
+}
+
+variable "retirement_session_host_resource_group_name" {
+  description = "Resource group containing the old session host VMs to be retired."
+  type        = string
+  default     = null
+}
+
+variable "replacement_generation_validation_marker" {
+  description = "Explicit approval marker confirming the replacement generation is ready, e.g. the new generation name g2408."
+  type        = string
+  default     = null
+}
+
+variable "drain_retention_hours" {
+  description = "Minimum hours a host must remain in drain mode before it is eligible for deletion. Default 30. Range 1-720."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.drain_retention_hours >= 1 && var.drain_retention_hours <= 720
+    error_message = "drain_retention_hours must be between 1 and 720."
+  }
+}
+
+variable "retirement_delete_network_interfaces" {
+  description = "When true, deletes generation-tagged NICs after the VM is removed."
+  type        = bool
+  default     = false
+}
+
+variable "retirement_delete_managed_disks" {
+  description = "When true, deletes the managed OS disk after the VM is removed."
+  type        = bool
+  default     = false
+}
+
+variable "retirement_max_deletions_per_run" {
+  description = "Maximum VMs to delete per runbook execution. Range 1-100. Default 10."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.retirement_max_deletions_per_run >= 1 && var.retirement_max_deletions_per_run <= 100
+    error_message = "retirement_max_deletions_per_run must be between 1 and 100."
+  }
+}
+
+variable "retirement_schedule_frequency_hours" {
+  description = "How often (hours) the retirement runbook schedule fires. Default 1."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.retirement_schedule_frequency_hours >= 1 && var.retirement_schedule_frequency_hours <= 24
+    error_message = "retirement_schedule_frequency_hours must be between 1 and 24."
+  }
+}
+

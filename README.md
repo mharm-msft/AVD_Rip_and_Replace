@@ -12,6 +12,7 @@ Production-oriented Infrastructure-as-Code for Azure Virtual Desktop (AVD) sessi
 - Creates VMs, NICs, managed identity, Trusted Launch settings, boot diagnostics, tags, zones, and optional post-deployment custom-script hooks.
 - Keeps **deployment** and **retirement** separate so a standard apply/deploy cannot delete the old generation.
 - Adds safe operator scripts for validation, drain mode, session handling, and retirement.
+- Adds optional **automated retirement** that safely deletes drained hosts after a configurable retention period (default **30 hours**), with full opt-in, WhatIf, and kill-switch controls.
 - Adds GitHub Actions validation that does **not require Azure credentials** on pull requests.
 
 > The solution **consumes a tested image**. It does **not** patch Windows or customer applications during deployment and it does **not** claim that "selecting the latest image" updates baked applications. You must publish and approve a new immutable image version before rollout.
@@ -26,7 +27,8 @@ Production-oriented Infrastructure-as-Code for Azure Virtual Desktop (AVD) sessi
 │   ├── main.bicep
 │   ├── modules/
 │   │   ├── hostPool.bicep
-│   │   └── sessionHostGeneration.bicep
+│   │   ├── sessionHostGeneration.bicep
+│   │   └── retirementAutomation.bicep
 │   └── parameters/example.parameters.json
 ├── docs/
 │   ├── diagrams/
@@ -37,17 +39,21 @@ Production-oriented Infrastructure-as-Code for Azure Virtual Desktop (AVD) sessi
 ├── scripts/
 │   ├── Get-AvdGenerationSessionHosts.ps1
 │   ├── Get-AvdGenerationUserSessions.ps1
+│   ├── Invoke-AvdAutoRetirement.ps1
 │   ├── Remove-AvdGenerationInfrastructure.ps1
 │   ├── Remove-AvdRetiredSessionHostRegistrations.ps1
 │   ├── Resolve-AvdGalleryImageVersion.ps1
 │   ├── Set-AvdGenerationDrainMode.ps1
 │   ├── Test-AvdGenerationReadiness.ps1
 │   └── Modules/AvdRipReplace/AvdRipReplace.psm1
-└── terraform/
-    ├── environments/example/
-    └── modules/
-        ├── host-pool/
-        └── session-host-generation/
+├── terraform/
+│   ├── environments/example/
+│   └── modules/
+│       ├── host-pool/
+│       ├── session-host-generation/
+│       └── retirement-automation/
+└── tests/
+    └── Invoke-AvdAutoRetirement.Tests.ps1
 ```
 
 ## Architecture
@@ -72,6 +78,19 @@ At minimum, the deployment identity should be able to:
 - Join devices to Microsoft Entra ID or Active Directory according to your chosen pattern.
 - Generate or rotate a short-lived host-pool registration token.
 
+### Automated retirement RBAC (least privilege)
+
+The Automation Account managed identity needs the following scoped roles:
+
+| Scope | Role |
+| --- | --- |
+| Session host resource group | `Virtual Machine Contributor` |
+| Session host resource group | `Network Contributor` (only if deleting NICs) |
+| Session host resource group | `Disk Snapshot Contributor` or `Contributor` (only if deleting disks) |
+| Session host resource group | `Tag Contributor` |
+| Control-plane resource group | `Desktop Virtualization Session Host Operator` |
+| Control-plane resource group | `Desktop Virtualization Contributor` |
+
 ### Tool versions
 
 - Terraform `>= 1.8.0`
@@ -79,6 +98,7 @@ At minimum, the deployment identity should be able to:
 - Bicep CLI `0.44+`
 - PowerShell `7+`
 - Az PowerShell modules for `Az.Compute`, `Az.DesktopVirtualization`, `Az.Network`, and `Az.Resources`
+- Pester `5.0+` (for running unit tests locally)
 
 ## Cost and security considerations
 
@@ -87,6 +107,7 @@ At minimum, the deployment identity should be able to:
 - Do not commit `.tfvars`, real parameter files, passwords, or tokens.
 - Prefer **Trusted Launch**, managed identities, and private networking.
 - Keep old and new generations independently manageable so rollback only requires toggling drain state and session routing, not emergency rebuilds.
+- The automated retirement feature is **disabled by default** and requires explicit opt-in.
 
 ## Quick start - Terraform
 
@@ -99,7 +120,11 @@ At minimum, the deployment identity should be able to:
 2. Resolve and pin the image version:
 
    ```powershell
-   ./scripts/Resolve-AvdGalleryImageVersion.ps1      -ResourceGroupName rg-image-prod      -GalleryName cgavd      -ImageDefinitionName win11-m365-avd      -OutputFormat Terraform
+   ./scripts/Resolve-AvdGalleryImageVersion.ps1 \
+     -ResourceGroupName rg-image-prod \
+     -GalleryName cgavd \
+     -ImageDefinitionName win11-m365-avd \
+     -OutputFormat Terraform
    ```
 
 3. Initialize and validate:
@@ -143,7 +168,10 @@ At minimum, the deployment identity should be able to:
 3. Deploy with a **pinned** gallery image version and a short-lived registration token for existing host pools:
 
    ```bash
-   az deployment group create      --resource-group rg-avd-sh-g2407      --template-file bicep/main.bicep      --parameters @/tmp/avd.parameters.json
+   az deployment group create \
+     --resource-group rg-avd-sh-g2407 \
+     --template-file bicep/main.bicep \
+     --parameters @/tmp/avd.parameters.json
    ```
 
 ### Bicep notes
@@ -152,6 +180,66 @@ At minimum, the deployment identity should be able to:
 - Existing host-pool deployments require `existingHostPoolRegistrationToken` as a secure parameter.
 - New host-pool deployments can create the host pool, desktop application group, and workspace in the same template.
 - Retirement remains a **separate operator action** and is intentionally not part of `main.bicep`.
+- The `bicep/modules/retirementAutomation.bicep` module can be deployed independently to set up the Automation Account.
+
+## Automated retirement (opt-in)
+
+The automated retirement capability is **disabled by default**. To enable it:
+
+1. Drain the old generation with drain-timestamp tagging:
+
+   ```powershell
+   ./scripts/Set-AvdGenerationDrainMode.ps1 `
+     -HostPoolName hp-avd-prod `
+     -ResourceGroupName rg-avd-controlplane-prod `
+     -GenerationName g2407 `
+     -SessionHostResourceGroupName rg-avd-sh-g2407 `
+     -TagAutoDelete
+   ```
+
+   This sets `AVDDrainStartedAt`, `AVDDrainMode`, `AVDGeneration`, and `AVDAutoDelete=true` tags on each
+   backing VM. **The 30-hour retention clock starts here**, not when the new generation was deployed.
+
+2. Dry-run the retirement script:
+
+   ```powershell
+   ./scripts/Invoke-AvdAutoRetirement.ps1 `
+     -HostPoolName hp-avd-prod `
+     -ResourceGroupName rg-avd-controlplane-prod `
+     -GenerationName g2407 `
+     -SessionHostResourceGroupName rg-avd-sh-g2407 `
+     -ReplacementGenerationValidationMarker g2408 `
+     -EnableAutomaticRetirement `
+     -WhatIf
+   ```
+
+3. After 30 hours, run live (or rely on the Azure Automation schedule):
+
+   ```powershell
+   ./scripts/Invoke-AvdAutoRetirement.ps1 `
+     -HostPoolName hp-avd-prod `
+     -ResourceGroupName rg-avd-controlplane-prod `
+     -GenerationName g2407 `
+     -SessionHostResourceGroupName rg-avd-sh-g2407 `
+     -ReplacementGenerationValidationMarker g2408 `
+     -EnableAutomaticRetirement `
+     -Confirm
+   ```
+
+### Safety controls
+
+| Control | Description |
+| --- | --- |
+| `-EnableAutomaticRetirement` | Must be present; the script exits immediately otherwise. |
+| `-KillSwitch` | Overrides everything; exits without deleting. |
+| `-WhatIf` | Full dry-run output; no deletions. |
+| `AVDAutoDelete=true` tag | Each VM must be individually opted in via the drain script `-TagAutoDelete`. |
+| `AVDDrainStartedAt` tag | Authoritative drain timestamp written once; re-runs preserve it. |
+| 30-hour default retention | Configurable via `-DrainRetentionHours` (default 30, range 1-720). |
+| Session guard | Hosts with active or disconnected sessions are skipped unless `-ForceLogoff`. |
+| Replacement validation | `-ReplacementGenerationValidationMarker` must be explicitly provided. |
+| `-MaxDeletionsPerRun` | Caps deletions per execution (default 10, max 100). |
+| Conservative defaults | NIC and disk deletion are **off** by default. |
 
 ## Generation lifecycle guidance
 
@@ -161,7 +249,16 @@ Use a **generation-per-state** or **generation-per-resource-group** operating mo
 - Example state keys: `prod/g2407.tfstate`, `prod/g2408.tfstate`
 - Example Bicep deployment names: `avd-g2407`, `avd-g2408`
 
-This keeps old and new generations side-by-side and prevents a routine apply or deployment from implicitly deleting the previous generation.
+This keeps old and new generations side-by-side and prevents a routine apply or deployment from
+implicitly deleting the previous generation.
+
+### Terraform state and automated deletion
+
+Automated deletion of VMs via the runbook occurs **outside Terraform state**. After retirement:
+
+- Run `terraform state rm` for each deleted resource, or run `terraform destroy` against the old state
+  (it will find nothing to delete).
+- Alternatively, delete the old generation resource group entirely and discard its state file.
 
 ## Rollback
 
@@ -169,7 +266,11 @@ This keeps old and new generations side-by-side and prevents a routine apply or 
 2. Re-enable the old generation for new sessions:
 
    ```powershell
-   ./scripts/Set-AvdGenerationDrainMode.ps1 -HostPoolName hp-avd-prod -ResourceGroupName rg-avd-controlplane-prod -GenerationName g2407 -EnableNewSessions
+   ./scripts/Set-AvdGenerationDrainMode.ps1 `
+     -HostPoolName hp-avd-prod `
+     -ResourceGroupName rg-avd-controlplane-prod `
+     -GenerationName g2407 `
+     -EnableNewSessions
    ```
 
 3. Put the failed new generation in drain mode.
@@ -177,7 +278,11 @@ This keeps old and new generations side-by-side and prevents a routine apply or 
 5. Clean up AVD registrations after infrastructure retirement:
 
    ```powershell
-   ./scripts/Remove-AvdRetiredSessionHostRegistrations.ps1 -HostPoolName hp-avd-prod -ResourceGroupName rg-avd-controlplane-prod -GenerationName g2408 -Force
+   ./scripts/Remove-AvdRetiredSessionHostRegistrations.ps1 `
+     -HostPoolName hp-avd-prod `
+     -ResourceGroupName rg-avd-controlplane-prod `
+     -GenerationName g2408 `
+     -Force
    ```
 
 ## Troubleshooting and limitations
@@ -187,6 +292,16 @@ This keeps old and new generations side-by-side and prevents a routine apply or 
 - The PowerShell scripts expect the Az modules and signed-in context to be present on the operator workstation.
 - Bicep existing-host-pool deployments expect a secure registration token value to be supplied externally.
 - The example files use placeholders and cannot deploy successfully until intentionally configured.
+- Automated retirement requires `SessionHostResourceGroupName` to look up and tag backing VMs. If a session host has no backing VM resource ID in AVD, it is skipped with a warning.
+- Azure Automation PowerShell 7.2 runbooks require the `Az` module. Import `Az.Accounts`, `Az.Compute`, `Az.DesktopVirtualization`, `Az.Network`, and `Az.Resources` from the PowerShell Gallery in the Automation Account.
+
+## Running tests locally
+
+```powershell
+Install-Module Pester -Scope CurrentUser -MinimumVersion 5.0.0
+Import-Module Pester -MinimumVersion 5.0.0
+Invoke-Pester -Path ./tests -Output Detailed
+```
 
 ## Runbook and reference documentation
 
