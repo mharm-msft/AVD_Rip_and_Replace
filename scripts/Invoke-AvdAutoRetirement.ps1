@@ -306,7 +306,7 @@ foreach ($record in $hosts) {
         }
       }
       else {
-        Write-Warning "Disk '$diskName' is not in an unattached state (state: $($disk?.DiskState)); skipping deletion."
+        Write-Warning "Disk '$diskName' is not in an unattached state (state: $(if ($disk) { $disk.DiskState } else { 'unknown' })); skipping deletion."
       }
     }
 

@@ -3,13 +3,13 @@ locals {
   # The runbook uses -UseAutomationManagedIdentity to authenticate.
   runbook_parameters = merge(
     {
-      HostPoolName                         = var.host_pool_name
-      ResourceGroupName                    = var.host_pool_resource_group_name
-      GenerationName                       = var.generation_name
-      SessionHostResourceGroupName         = var.session_host_resource_group_name
+      HostPoolName                          = var.host_pool_name
+      ResourceGroupName                     = var.host_pool_resource_group_name
+      GenerationName                        = var.generation_name
+      SessionHostResourceGroupName          = var.session_host_resource_group_name
       ReplacementGenerationValidationMarker = var.replacement_generation_validation_marker
-      DrainRetentionHours                  = tostring(var.drain_retention_hours)
-      MaxDeletionsPerRun                   = tostring(var.max_deletions_per_run)
+      DrainRetentionHours                   = tostring(var.drain_retention_hours)
+      MaxDeletionsPerRun                    = tostring(var.max_deletions_per_run)
     },
     var.host_name_prefix != "" ? { HostNamePrefix = var.host_name_prefix } : {},
     var.delete_network_interfaces ? { DeleteNetworkInterfaces = "true" } : {},
@@ -17,8 +17,11 @@ locals {
     var.enable_automatic_retirement ? { EnableAutomaticRetirement = "true" } : {}
   )
 
-  # Embed the retirement script content directly from the scripts directory so
+  # Embed the retirement script content directly from the repository scripts directory so
   # the runbook is always in sync with the operator script.
+  # This module is designed to be used from within the same repository at
+  # terraform/modules/retirement-automation/ relative to the repo root; the path
+  # is anchored via path.module which resolves to the module's own directory.
   runbook_content = file("${path.module}/../../../scripts/Invoke-AvdAutoRetirement.ps1")
 }
 

@@ -53,6 +53,9 @@ param scheduleFrequencyHours int = 1
 param tags object = {}
 
 // Embed the retirement script so the runbook is always in sync with the operator script.
+// loadTextContent paths in Bicep are resolved at compile time, relative to this file.
+// This module must be compiled from its location within the repository at
+// bicep/modules/retirementAutomation.bicep so that ../../scripts/ resolves correctly.
 var runbookContent = loadTextContent('../../scripts/Invoke-AvdAutoRetirement.ps1')
 
 resource automationAccount 'Microsoft.Automation/automationAccounts@2023-11-01' = {

@@ -286,7 +286,8 @@ Describe 'Test-AvdHostRetirementEligibility' {
 Describe 'Invoke-AvdAutoRetirement.ps1 - script-level safety gates' {
 
   BeforeAll {
-    $script:scriptPath = Join-Path $PSScriptRoot '../scripts/Invoke-AvdAutoRetirement.ps1'
+    # $script: scope is required in Pester 5 to share variables between BeforeAll and It blocks.
+    $script:retirementScriptPath = Join-Path $PSScriptRoot '../scripts/Invoke-AvdAutoRetirement.ps1'
 
     # Stub out all Az cmdlets so the script runs without Azure credentials.
     function global:Get-AzWvdSessionHost { return @() }
@@ -305,7 +306,7 @@ Describe 'Invoke-AvdAutoRetirement.ps1 - script-level safety gates' {
   }
 
   It 'Exits early and writes a warning when EnableAutomaticRetirement is not set' {
-    $output = & $script:scriptPath `
+    $output = & $script:retirementScriptPath `
       -HostPoolName 'hp-test' `
       -ResourceGroupName 'rg-cp' `
       -GenerationName 'g2407' `
@@ -318,7 +319,7 @@ Describe 'Invoke-AvdAutoRetirement.ps1 - script-level safety gates' {
   }
 
   It 'Exits early and writes a warning when KillSwitch is present' {
-    $output = & $script:scriptPath `
+    $output = & $script:retirementScriptPath `
       -HostPoolName 'hp-test' `
       -ResourceGroupName 'rg-cp' `
       -GenerationName 'g2407' `
@@ -337,7 +338,7 @@ Describe 'Invoke-AvdAutoRetirement.ps1 - script-level safety gates' {
     # for the 3rd host should mention MaxDeletionsPerRun only if 2 were processed.
     # Since all hosts fail eligibility due to missing tags/no VMs, we just verify the
     # script completes without error.
-    $result = & $script:scriptPath `
+    $result = & $script:retirementScriptPath `
       -HostPoolName 'hp-test' `
       -ResourceGroupName 'rg-cp' `
       -GenerationName 'g2407' `

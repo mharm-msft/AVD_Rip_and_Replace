@@ -53,7 +53,8 @@ foreach ($sessionHostRecord in $hosts) {
       # explicitly requests a reset.  This prevents accidentally shortening the retention window.
       $drainStartedAt = $existingTags['AVDDrainStartedAt']
       if ([string]::IsNullOrWhiteSpace($drainStartedAt) -or $ResetDrainTimestamp.IsPresent) {
-        $drainStartedAt = [datetime]::UtcNow.ToString('o')
+        # Use a compact UTC format (no fractional seconds) that is clean for tag display.
+        $drainStartedAt = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
       }
 
       $updatedTags = $existingTags.Clone()
