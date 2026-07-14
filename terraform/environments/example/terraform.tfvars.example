@@ -1,0 +1,70 @@
+subscription_id                   = "00000000-0000-0000-0000-000000000000"
+location                          = "eastus2"
+control_plane_resource_group_name = "rg-avd-controlplane-prod"
+session_host_resource_group_name  = "rg-avd-sh-g2407"
+
+create_host_pool                  = false
+existing_host_pool_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-avd-controlplane-prod/providers/Microsoft.DesktopVirtualization/hostPools/hp-avd-prod"
+existing_host_pool_name           = "hp-avd-prod"
+# host_pool_name                  = "hp-avd-prod"
+# desktop_application_group_name  = "dag-avd-prod"
+# workspace_name                  = "ws-avd-prod"
+
+generation_name                   = "g2407"
+host_name_prefix                  = "avd"
+start_host_number                 = 101
+session_host_count                = 5
+registration_token_expiration_utc = "2026-07-31T04:00:00Z"
+subnet_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-prod/providers/Microsoft.Network/virtualNetworks/vnet-avd-prod/subnets/snet-sessionhosts"
+vm_size                           = "Standard_D4s_v5"
+admin_username                    = "localadmin"
+admin_password                    = "REPLACE_AT_APPLY_TIME"
+
+os_disk = {
+  storage_account_type = "Premium_LRS"
+  disk_size_gb         = 128
+}
+
+availability_zones             = ["1", "2", "3"]
+accelerated_networking_enabled = true
+security_type                  = "TrustedLaunch"
+secure_boot_enabled            = true
+vtpm_enabled                   = true
+boot_diagnostics_enabled       = true
+
+managed_identity = {
+  type         = "SystemAssigned"
+  identity_ids = []
+}
+
+image_source = {
+  type                     = "gallery"
+  gallery_image_version_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-image-prod/providers/Microsoft.Compute/galleries/cgavd/images/win11-m365-avd/versions/1.0.2407.1"
+}
+
+# Example pinned marketplace alternative.
+# image_source = {
+#   type = "marketplace"
+#   marketplace = {
+#     publisher = "microsoftwindowsdesktop"
+#     offer     = "windows-ent-cpc"
+#     sku       = "win11-23h2-avd-m365"
+#     version   = "22631.3880.240622"
+#   }
+# }
+
+domain_join = {
+  type = "entra"
+}
+
+custom_script = {
+  enabled            = false
+  file_uris          = []
+  command_to_execute = null
+}
+
+tags = {
+  environment = "prod"
+  service     = "avd"
+  owner       = "platform"
+}
