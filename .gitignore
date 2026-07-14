@@ -1,0 +1,13 @@
+.terraform/
+.terraform.lock.hcl.tmp
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.bicepconfig.local.json
+*.user
+.vscode/
+.idea/
+.DS_Store
+pwsh_modules/
+bicep/main.json

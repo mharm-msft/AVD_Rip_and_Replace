@@ -1,0 +1,79 @@
+name: Validate repository
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Terraform fmt
+        run: terraform -chdir=terraform/environments/example fmt -check -recursive
+      - name: Terraform init
+        run: terraform -chdir=terraform/environments/example init -backend=false
+      - name: Terraform validate
+        run: terraform -chdir=terraform/environments/example validate
+
+  bicep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bicep CLI
+        run: az bicep install
+      - name: Bicep build
+        run: bicep build bicep/main.bicep
+      - name: Bicep lint
+        run: bicep lint bicep/main.bicep
+
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+      - name: Analyze scripts
+        shell: pwsh
+        run: |
+          $settings = @{
+            Severity = @('Error', 'Warning')
+            Path     = './scripts'
+            Recurse  = $true
+          }
+          $results = Invoke-ScriptAnalyzer @settings
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw 'PSScriptAnalyzer reported findings.'
+          }
+
+  repository-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v20
+        with:
+          globs: |
+            **/*.md
+      - name: Verify required repository assets
+        run: |
+          test -f README.md
+          test -f LICENSE
+          test -f CONTRIBUTING.md
+          test -f terraform/environments/example/main.tf
+          test -f bicep/main.bicep
+          test -f scripts/Resolve-AvdGalleryImageVersion.ps1

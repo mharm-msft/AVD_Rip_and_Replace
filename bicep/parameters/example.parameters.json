@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "eastus2"
+    },
+    "hostPoolResourceGroupName": {
+      "value": "rg-avd-controlplane-prod"
+    },
+    "sessionHostResourceGroupName": {
+      "value": "rg-avd-sh-g2407"
+    },
+    "createHostPool": {
+      "value": false
+    },
+    "hostPoolName": {
+      "value": "hp-avd-prod"
+    },
+    "generationName": {
+      "value": "g2407"
+    },
+    "hostNamePrefix": {
+      "value": "avd"
+    },
+    "sessionHostCount": {
+      "value": 5
+    },
+    "startHostNumber": {
+      "value": 101
+    },
+    "subnetId": {
+      "value": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-prod/providers/Microsoft.Network/virtualNetworks/vnet-avd-prod/subnets/snet-sessionhosts"
+    },
+    "vmSize": {
+      "value": "Standard_D4s_v5"
+    },
+    "adminUsername": {
+      "value": "localadmin"
+    },
+    "adminPassword": {
+      "value": "REPLACE_AT_DEPLOY_TIME"
+    },
+    "registrationTokenExpirationUtc": {
+      "value": "2026-07-31T04:00:00Z"
+    },
+    "existingHostPoolRegistrationToken": {
+      "value": "REPLACE_WITH_SHORT_LIVED_TOKEN"
+    },
+    "imageSourceType": {
+      "value": "gallery"
+    },
+    "galleryImageVersionId": {
+      "value": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-image-prod/providers/Microsoft.Compute/galleries/cgavd/images/win11-m365-avd/versions/1.0.2407.1"
+    },
+    "availabilityZones": {
+      "value": ["1", "2", "3"]
+    },
+    "managedIdentityType": {
+      "value": "SystemAssigned"
+    },
+    "userAssignedIdentities": {
+      "value": {}
+    },
+    "joinType": {
+      "value": "entra"
+    },
+    "customScript": {
+      "value": {
+        "enabled": false,
+        "fileUris": [],
+        "commandToExecute": ""
+      }
+    },
+    "tags": {
+      "value": {
+        "environment": "prod",
+        "service": "avd",
+        "owner": "platform"
+      }
+    }
+  }
+}
