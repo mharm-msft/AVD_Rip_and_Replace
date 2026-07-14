@@ -1,0 +1,186 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "9720492740309278975"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "automationAccountName": {
+      "type": "string"
+    },
+    "skuName": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "Free"
+      ]
+    },
+    "hostPoolName": {
+      "type": "string"
+    },
+    "hostPoolResourceGroupName": {
+      "type": "string"
+    },
+    "generationName": {
+      "type": "string"
+    },
+    "sessionHostResourceGroupName": {
+      "type": "string"
+    },
+    "replacementGenerationValidationMarker": {
+      "type": "string",
+      "metadata": {
+        "description": "Explicit marker confirming the replacement generation is approved, e.g. the new generation name."
+      }
+    },
+    "hostNamePrefix": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "drainRetentionHours": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 1,
+      "maxValue": 720
+    },
+    "enableAutomaticRetirement": {
+      "type": "bool",
+      "defaultValue": false
+    },
+    "deleteNetworkInterfaces": {
+      "type": "bool",
+      "defaultValue": false
+    },
+    "deleteManagedDisks": {
+      "type": "bool",
+      "defaultValue": false
+    },
+    "maxDeletionsPerRun": {
+      "type": "int",
+      "defaultValue": 10,
+      "minValue": 1,
+      "maxValue": 100
+    },
+    "scheduleFrequencyHours": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 24
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {}
+    },
+    "baseTime": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": {
+        "description": "Base time used to compute the schedule start time. Defaults to the current UTC time at deployment."
+      }
+    }
+  },
+  "variables": {
+    "runbookContent": "<#\n.SYNOPSIS\n  Automated, opt-in retirement of AVD session hosts that have been in drain mode for a\n  configurable retention period.\n\n.DESCRIPTION\n  Discovers eligible drained AVD session hosts for a given generation, verifies all safety\n  guards, and retires them (VM, optionally NIC and managed disk, then AVD registration).\n\n  SAFETY DEFAULTS:\n  - Automatic retirement is DISABLED by default.  Pass -EnableAutomaticRetirement to opt in.\n  - Default retention period is 30 hours from the drain-start timestamp on the backing VM.\n  - Hosts with active or disconnected sessions are skipped unless -ForceLogoff is provided.\n  - A maximum of 10 VMs are deleted per run (configure with -MaxDeletionsPerRun, max 100).\n  - NIC and managed-disk deletion are disabled by default (conservative).\n  - A global -KillSwitch exits immediately without deleting anything.\n  - Full WhatIf/ShouldProcess support.\n\n  ELIGIBILITY REQUIREMENTS (all must be met):\n  1. Session host belongs to the specified host pool and generation name.\n  2. AVD drain mode is currently enabled (AllowNewSession = false).\n  3. Backing VM has AVDAutoDelete tag set to 'true'.\n  4. Backing VM has a valid AVDDrainStartedAt UTC timestamp tag.\n  5. Time elapsed since drain start >= DrainRetentionHours.\n  6. ReplacementGenerationValidationMarker parameter explicitly provided.\n  7. Zero active AND disconnected sessions (unless -ForceLogoff).\n\n  RESOURCE DELETION ORDER (per host):\n  1. Force-log off any remaining sessions (only when -ForceLogoff).\n  2. Delete the Azure VM.\n  3. Delete the NIC (only when -DeleteNetworkInterfaces and NIC is detached).\n  4. Delete the managed OS disk (only when -DeleteManagedDisks and disk is detached).\n  5. Remove the AVD session-host registration.\n\n.PARAMETER HostPoolName\n  Name of the AVD host pool.\n\n.PARAMETER ResourceGroupName\n  Resource group that contains the AVD host pool (control-plane RG).\n\n.PARAMETER GenerationName\n  Generation identifier of the old hosts to retire, e.g. g2407.\n\n.PARAMETER SessionHostResourceGroupName\n  Resource group that contains the session host VMs to be retired.\n\n.PARAMETER ReplacementGenerationValidationMarker\n  An explicit string that confirms the replacement generation is approved and ready,\n  for example the new generation name 'g2408' or an approval ticket number.\n  The script does NOT infer readiness from VM age or image version alone.\n\n.PARAMETER HostNamePrefix\n  Optional host name prefix used to narrow the session host pattern match.\n\n.PARAMETER DrainRetentionHours\n  Minimum hours a host must have been in drain mode before it is eligible for deletion.\n  Default: 30.  Valid range: 1-720.\n\n.PARAMETER EnableAutomaticRetirement\n  Must be supplied explicitly to permit any deletion.  Disabled by default as a safety gate.\n\n.PARAMETER DeleteNetworkInterfaces\n  When present, deletes generation-tagged NICs after the VM is removed (only detached NICs).\n\n.PARAMETER DeleteManagedDisks\n  When present, deletes the managed OS disk after the VM is removed.\n\n.PARAMETER ForceLogoff\n  When present, logs off active and disconnected sessions before deletion.\n  Requires ShouldProcess confirmation per session.\n\n.PARAMETER KillSwitch\n  Global kill switch.  When present, exits immediately without deleting anything.\n\n.PARAMETER MaxDeletionsPerRun\n  Maximum number of VMs to delete in a single run.  Default: 10.  Range: 1-100.\n\n.PARAMETER UseAutomationManagedIdentity\n  When present, authenticates to Azure using the managed identity of an Azure Automation\n  Account (Connect-AzAccount -Identity).  Use this when running as an Azure Automation runbook.\n\n.EXAMPLE\n  # Dry run - see what would be retired\n  ./scripts/Invoke-AvdAutoRetirement.ps1 `\n      -HostPoolName hp-avd-prod `\n      -ResourceGroupName rg-avd-controlplane-prod `\n      -GenerationName g2407 `\n      -SessionHostResourceGroupName rg-avd-sh-g2407 `\n      -ReplacementGenerationValidationMarker g2408 `\n      -EnableAutomaticRetirement `\n      -WhatIf\n\n.EXAMPLE\n  # Live run with session force-logoff and disk cleanup\n  ./scripts/Invoke-AvdAutoRetirement.ps1 `\n      -HostPoolName hp-avd-prod `\n      -ResourceGroupName rg-avd-controlplane-prod `\n      -GenerationName g2407 `\n      -SessionHostResourceGroupName rg-avd-sh-g2407 `\n      -ReplacementGenerationValidationMarker g2408 `\n      -EnableAutomaticRetirement `\n      -DeleteNetworkInterfaces `\n      -DeleteManagedDisks `\n      -ForceLogoff `\n      -MaxDeletionsPerRun 5 `\n      -Confirm\n#>\n[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]\nparam(\n  [Parameter(Mandatory)]\n  [string]$HostPoolName,\n\n  [Parameter(Mandatory)]\n  [string]$ResourceGroupName,\n\n  [Parameter(Mandatory)]\n  [string]$GenerationName,\n\n  [Parameter(Mandatory)]\n  [string]$SessionHostResourceGroupName,\n\n  [Parameter(Mandatory)]\n  [string]$ReplacementGenerationValidationMarker,\n\n  [string]$HostNamePrefix,\n\n  [ValidateRange(1, 720)]\n  [int]$DrainRetentionHours = 30,\n\n  [switch]$EnableAutomaticRetirement,\n\n  [switch]$DeleteNetworkInterfaces,\n\n  [switch]$DeleteManagedDisks,\n\n  [switch]$ForceLogoff,\n\n  [switch]$KillSwitch,\n\n  [ValidateRange(1, 100)]\n  [int]$MaxDeletionsPerRun = 10,\n\n  [switch]$UseAutomationManagedIdentity\n)\n\nSet-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n\n# Authenticate when running inside Azure Automation with a managed identity.\nif ($UseAutomationManagedIdentity.IsPresent) {\n  Write-Output 'Connecting to Azure using managed identity...'\n  Connect-AzAccount -Identity | Out-Null\n}\n\nImport-Module (Join-Path $PSScriptRoot 'Modules/AvdRipReplace/AvdRipReplace.psm1') -Force\n\n# -------------------------------------------------------------------------\n# Global kill switch\n# -------------------------------------------------------------------------\nif ($KillSwitch.IsPresent) {\n  Write-Warning 'KillSwitch is active. Exiting without deleting any resources.'\n  return\n}\n\n# -------------------------------------------------------------------------\n# Opt-in gate\n# -------------------------------------------------------------------------\nif (-not $EnableAutomaticRetirement.IsPresent) {\n  Write-Warning ('Automatic retirement is disabled. Pass -EnableAutomaticRetirement to opt in. ' +\n    'Use -WhatIf to preview what would be retired without this flag.')\n  return\n}\n\nWrite-Verbose \"Replacement generation validation marker: '$ReplacementGenerationValidationMarker'\"\nWrite-Verbose \"Drain retention: $DrainRetentionHours hours | Max deletions per run: $MaxDeletionsPerRun\"\n\n# -------------------------------------------------------------------------\n# Discover session hosts for the target generation\n# -------------------------------------------------------------------------\n$hosts = Get-AvdGenerationSessionHostRecord `\n  -HostPoolName $HostPoolName `\n  -ResourceGroupName $ResourceGroupName `\n  -GenerationName $GenerationName `\n  -HostNamePrefix $HostNamePrefix `\n  -SessionHostResourceGroupName $SessionHostResourceGroupName\n\nif (-not $hosts) {\n  Write-Warning \"No session hosts found for generation '$GenerationName' in host pool '$HostPoolName'.\"\n  return\n}\n\nWrite-Verbose \"Found $($hosts.Count) session host(s) for generation '$GenerationName'.\"\n\n# -------------------------------------------------------------------------\n# Evaluate each host for eligibility then retire\n# -------------------------------------------------------------------------\n$deletedCount  = 0\n$skippedHosts  = [System.Collections.Generic.List[pscustomobject]]::new()\n$retiredHosts  = [System.Collections.Generic.List[pscustomobject]]::new()\n$failedHosts   = [System.Collections.Generic.List[pscustomobject]]::new()\n\nforeach ($record in $hosts) {\n  if ($deletedCount -ge $MaxDeletionsPerRun) {\n    $skippedHosts.Add([pscustomobject]@{\n        Host   = $record.ShortName\n        Reason = \"MaxDeletionsPerRun ($MaxDeletionsPerRun) reached for this run\"\n      })\n    continue\n  }\n\n  Write-Verbose \"Evaluating '$($record.ShortName)'...\"\n\n  # ------- Fetch VM tags -------\n  $vmTags = @{}\n  if ($record.VmId) {\n    $vm = Get-AzVM -ResourceGroupName $SessionHostResourceGroupName -Name $record.VmName -ErrorAction SilentlyContinue\n    if ($vm -and $vm.Tags) { $vmTags = $vm.Tags }\n  }\n  else {\n    $vm = $null\n  }\n\n  # ------- Count active + disconnected sessions -------\n  $sessionCount = 0\n  $activeSessions = @()\n  try {\n    $shortName = $record.SessionHostName\n    $activeSessions = @(Get-AzWvdUserSession `\n      -HostPoolName $HostPoolName `\n      -ResourceGroupName $ResourceGroupName `\n      -SessionHostName $shortName `\n      -ErrorAction Stop |\n      Where-Object { $_.SessionState -in @('Active', 'Disconnected') })\n    $sessionCount = $activeSessions.Count\n  }\n  catch {\n    Write-Warning \"Could not retrieve sessions for '$($record.ShortName)': $_\"\n  }\n\n  # ------- Test eligibility -------\n  $eligibility = Test-AvdHostRetirementEligibility `\n    -AllowNewSession ($record.AllowNewSession -eq $true) `\n    -ReplacementGenerationValidationMarker $ReplacementGenerationValidationMarker `\n    -DrainRetentionHours $DrainRetentionHours `\n    -ActiveAndDisconnectedSessionCount $sessionCount `\n    -ForceLogoff $ForceLogoff.IsPresent `\n    -VmTags $vmTags\n\n  if (-not $eligibility.IsEligible) {\n    $skippedHosts.Add([pscustomobject]@{ Host = $record.ShortName; Reason = $eligibility.SkipReason })\n    Write-Verbose \"Skipping '$($record.ShortName)': $($eligibility.SkipReason)\"\n    continue\n  }\n\n  # ------- Retire this host -------\n  Write-Verbose \"Host '$($record.ShortName)' is eligible for retirement.\"\n\n  try {\n    # Step 1: Force-logoff any remaining sessions\n    if ($ForceLogoff.IsPresent -and $activeSessions.Count -gt 0) {\n      foreach ($session in $activeSessions) {\n        $sessionTarget = '{0} session {1} (user: {2})' -f $record.ShortName, $session.Id, $session.UserPrincipalName\n        if ($PSCmdlet.ShouldProcess($sessionTarget, 'Force log off user session')) {\n          Remove-AzWvdUserSession `\n            -HostPoolName $HostPoolName `\n            -ResourceGroupName $ResourceGroupName `\n            -SessionHostName $record.SessionHostName `\n            -Id $session.Id `\n            -Force | Out-Null\n          Write-Verbose \"Logged off session $($session.Id) from '$($record.ShortName)'.\"\n        }\n      }\n    }\n\n    # Step 2: Delete the VM\n    if ($vm -and $PSCmdlet.ShouldProcess($record.VmName, 'Delete session host virtual machine')) {\n      Remove-AzVM -ResourceGroupName $SessionHostResourceGroupName -Name $record.VmName -Force | Out-Null\n      Write-Verbose \"Deleted VM '$($record.VmName)'.\"\n    }\n\n    # Step 3: Delete the NIC (only if configured and no longer attached)\n    if ($DeleteNetworkInterfaces.IsPresent -and $vm) {\n      foreach ($nicRef in $vm.NetworkProfile.NetworkInterfaces) {\n        $nicName = ($nicRef.Id -split '/')[-1]\n        $nic = Get-AzNetworkInterface -ResourceGroupName $SessionHostResourceGroupName -Name $nicName -ErrorAction SilentlyContinue\n        if ($nic -and -not $nic.VirtualMachine) {\n          if ($PSCmdlet.ShouldProcess($nicName, 'Delete session host NIC')) {\n            Remove-AzNetworkInterface -ResourceGroupName $SessionHostResourceGroupName -Name $nicName -Force | Out-Null\n            Write-Verbose \"Deleted NIC '$nicName'.\"\n          }\n        }\n        elseif ($nic) {\n          Write-Warning \"NIC '$nicName' is still attached; skipping deletion.\"\n        }\n      }\n    }\n\n    # Step 4: Delete the managed OS disk (only if configured)\n    if ($DeleteManagedDisks.IsPresent -and $vm -and $vm.StorageProfile.OsDisk.ManagedDisk.Id) {\n      $diskName = ($vm.StorageProfile.OsDisk.ManagedDisk.Id -split '/')[-1]\n      $disk = Get-AzDisk -ResourceGroupName $SessionHostResourceGroupName -DiskName $diskName -ErrorAction SilentlyContinue\n      if ($disk -and $disk.DiskState -in @('Unattached', 'Reserved')) {\n        if ($PSCmdlet.ShouldProcess($diskName, 'Delete managed OS disk')) {\n          Remove-AzDisk -ResourceGroupName $SessionHostResourceGroupName -DiskName $diskName -Force | Out-Null\n          Write-Verbose \"Deleted OS disk '$diskName'.\"\n        }\n      }\n      else {\n        Write-Warning \"Disk '$diskName' is not in an unattached state (state: $(if ($disk) { $disk.DiskState } else { 'unknown' })); skipping deletion.\"\n      }\n    }\n\n    # Step 5: Remove the AVD session-host registration\n    if ($PSCmdlet.ShouldProcess($record.SessionHostName, 'Remove AVD session host registration')) {\n      Remove-AzWvdSessionHost `\n        -HostPoolName $HostPoolName `\n        -ResourceGroupName $ResourceGroupName `\n        -Name $record.SessionHostName `\n        -Force | Out-Null\n      Write-Verbose \"Removed AVD registration for '$($record.SessionHostName)'.\"\n    }\n\n    $retiredHosts.Add([pscustomobject]@{ Host = $record.ShortName; VmName = $record.VmName })\n    $deletedCount++\n  }\n  catch {\n    $failedHosts.Add([pscustomobject]@{ Host = $record.ShortName; Error = $_.ToString() })\n    Write-Warning \"Failed to retire '$($record.ShortName)': $_\"\n    # One failure does not stop the remaining hosts.\n  }\n}\n\n# -------------------------------------------------------------------------\n# Summary report\n# -------------------------------------------------------------------------\nWrite-Output ''\nWrite-Output '=== AVD Auto Retirement Run Summary ==='\nWrite-Output \"Generation : $GenerationName\"\nWrite-Output \"Host pool  : $HostPoolName\"\nWrite-Output \"Evaluated  : $($hosts.Count) host(s)\"\nWrite-Output \"Retired    : $($retiredHosts.Count) host(s)\"\nWrite-Output \"Skipped    : $($skippedHosts.Count) host(s)\"\nWrite-Output \"Failed     : $($failedHosts.Count) host(s)\"\n\nif ($retiredHosts.Count -gt 0) {\n  Write-Output ''\n  Write-Output '-- Retired --'\n  $retiredHosts | Format-Table -AutoSize\n}\n\nif ($skippedHosts.Count -gt 0) {\n  Write-Output ''\n  Write-Output '-- Skipped (reason) --'\n  $skippedHosts | Format-Table -AutoSize\n}\n\nif ($failedHosts.Count -gt 0) {\n  Write-Output ''\n  Write-Output '-- Failed (partial failure - investigate before re-running) --'\n  $failedHosts | Format-Table -AutoSize\n  Write-Warning 'One or more hosts failed to retire. See the Failed list above and investigate before re-running.'\n}\n",
+    "runbookParameters": "[union(createObject('HostPoolName', parameters('hostPoolName'), 'ResourceGroupName', parameters('hostPoolResourceGroupName'), 'GenerationName', parameters('generationName'), 'SessionHostResourceGroupName', parameters('sessionHostResourceGroupName'), 'ReplacementGenerationValidationMarker', parameters('replacementGenerationValidationMarker'), 'DrainRetentionHours', string(parameters('drainRetentionHours')), 'MaxDeletionsPerRun', string(parameters('maxDeletionsPerRun')), 'UseAutomationManagedIdentity', 'true'), if(parameters('enableAutomaticRetirement'), createObject('EnableAutomaticRetirement', 'true'), createObject()), if(not(empty(parameters('hostNamePrefix'))), createObject('HostNamePrefix', parameters('hostNamePrefix')), createObject()), if(parameters('deleteNetworkInterfaces'), createObject('DeleteNetworkInterfaces', 'true'), createObject()), if(parameters('deleteManagedDisks'), createObject('DeleteManagedDisks', 'true'), createObject()))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2023-11-01",
+      "name": "[parameters('automationAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "sku": {
+          "name": "[parameters('skuName')]"
+        },
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', parameters('automationAccountName'), 'Invoke-AvdAutoRetirement')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "runbookType": "PowerShell72",
+        "logVerbose": false,
+        "logProgress": true,
+        "description": "Automatically retires eligible drained AVD session hosts after the configured retention period.",
+        "publishContentLink": {
+          "uri": "[format('data:text/plain;base64,{0}', base64(variables('runbookContent')))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableAutomaticRetirement')]",
+      "type": "Microsoft.Automation/automationAccounts/schedules",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', parameters('automationAccountName'), 'avd-retirement-hourly')]",
+      "properties": {
+        "description": "[format('Triggers the AVD auto-retirement runbook every {0} hour(s).', parameters('scheduleFrequencyHours'))]",
+        "frequency": "Hour",
+        "interval": "[parameters('scheduleFrequencyHours')]",
+        "timeZone": "UTC",
+        "startTime": "[dateTimeAdd(parameters('baseTime'), 'PT5M')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableAutomaticRetirement')]",
+      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', parameters('automationAccountName'), guid(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), 'Invoke-AvdAutoRetirement', 'schedule'))]",
+      "properties": {
+        "schedule": {
+          "name": "avd-retirement-hourly"
+        },
+        "runbook": {
+          "name": "Invoke-AvdAutoRetirement"
+        },
+        "parameters": "[variables('runbookParameters')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', parameters('automationAccountName'), 'Invoke-AvdAutoRetirement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/schedules', parameters('automationAccountName'), 'avd-retirement-hourly')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "automationAccountId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+    },
+    "automationAccountName": {
+      "type": "string",
+      "value": "[parameters('automationAccountName')]"
+    },
+    "automationAccountPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]"
+    },
+    "runbookName": {
+      "type": "string",
+      "value": "Invoke-AvdAutoRetirement"
+    }
+  }
+}

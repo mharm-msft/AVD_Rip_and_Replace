@@ -1,7 +1,8 @@
 locals {
-  use_created_host_pool = var.create_host_pool
-  host_pool_id          = local.use_created_host_pool ? module.host_pool[0].host_pool_id : var.existing_host_pool_id
-  host_pool_name        = local.use_created_host_pool ? module.host_pool[0].host_pool_name : var.existing_host_pool_name
+  use_created_host_pool                = var.create_host_pool
+  host_pool_id                         = local.use_created_host_pool ? module.host_pool[0].host_pool_id : var.existing_host_pool_id
+  host_pool_name                       = local.use_created_host_pool ? module.host_pool[0].host_pool_name : var.existing_host_pool_name
+  retirement_automation_resource_group = coalesce(var.retirement_automation_resource_group_name, var.control_plane_resource_group_name)
 }
 
 module "host_pool" {
@@ -51,9 +52,38 @@ module "session_host_generation" {
   tags                                 = var.tags
 }
 
+module "retirement_automation" {
+  source = "../../modules/retirement-automation"
+  count  = var.enable_retirement_automation ? 1 : 0
+
+  location                                 = var.location
+  resource_group_name                      = local.retirement_automation_resource_group
+  automation_account_name                  = var.retirement_automation_account_name
+  host_pool_name                           = local.host_pool_name
+  host_pool_resource_group_name            = var.control_plane_resource_group_name
+  generation_name                          = coalesce(var.retirement_generation_name, var.generation_name)
+  session_host_resource_group_name         = coalesce(var.retirement_session_host_resource_group_name, var.session_host_resource_group_name)
+  replacement_generation_validation_marker = var.replacement_generation_validation_marker
+  drain_retention_hours                    = var.drain_retention_hours
+  enable_automatic_retirement              = var.enable_automatic_retirement
+  delete_network_interfaces                = var.retirement_delete_network_interfaces
+  delete_managed_disks                     = var.retirement_delete_managed_disks
+  max_deletions_per_run                    = var.retirement_max_deletions_per_run
+  schedule_frequency_hours                 = var.retirement_schedule_frequency_hours
+  tags                                     = var.tags
+}
+
 check "host_pool_mode" {
   assert {
     condition     = var.create_host_pool ? (var.host_pool_name != null && var.desktop_application_group_name != null && var.workspace_name != null) : (var.existing_host_pool_id != null && var.existing_host_pool_name != null)
     error_message = "Set host_pool_name/desktop_application_group_name/workspace_name when create_host_pool is true, otherwise provide existing_host_pool_id and existing_host_pool_name."
   }
 }
+
+check "retirement_automation_prerequisites" {
+  assert {
+    condition     = !var.enable_retirement_automation || (var.retirement_automation_account_name != null && var.replacement_generation_validation_marker != null)
+    error_message = "Set retirement_automation_account_name and replacement_generation_validation_marker when enable_retirement_automation is true."
+  }
+}
+
