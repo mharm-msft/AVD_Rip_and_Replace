@@ -52,6 +52,9 @@ param scheduleFrequencyHours int = 1
 
 param tags object = {}
 
+@description('Base time used to compute the schedule start time. Defaults to the current UTC time at deployment.')
+param baseTime string = utcNow()
+
 // Embed the retirement script so the runbook is always in sync with the operator script.
 // loadTextContent paths in Bicep are resolved at compile time, relative to this file.
 // This module must be compiled from its location within the repository at
@@ -115,7 +118,7 @@ resource retirementSchedule 'Microsoft.Automation/automationAccounts/schedules@2
     frequency: 'Hour'
     interval: scheduleFrequencyHours
     timeZone: 'UTC'
-    startTime: dateTimeAdd(utcNow(), 'PT5M')
+    startTime: dateTimeAdd(baseTime, 'PT5M')
   }
 }
 
