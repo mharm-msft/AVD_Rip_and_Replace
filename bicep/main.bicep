@@ -103,7 +103,7 @@ module hostPool './modules/hostPool.bicep' = if (createHostPool) {
   }
 }
 
-var hostPoolRegistrationToken = createHostPool ? hostPool.outputs.hostPoolRegistrationToken : existingHostPoolRegistrationToken
+var hostPoolRegistrationToken = createHostPool ? hostPool!.outputs.hostPoolRegistrationToken : existingHostPoolRegistrationToken
 
 module sessionHostGeneration './modules/sessionHostGeneration.bicep' = {
   name: 'generation-${generationName}-${uniqueString(resourceGroup().id, generationName)}'
@@ -141,7 +141,7 @@ module sessionHostGeneration './modules/sessionHostGeneration.bicep' = {
 }
 
 output generationName string = generationName
-output hostPoolId string = createHostPool ? hostPool.outputs.hostPoolId : resourceId('Microsoft.DesktopVirtualization/hostPools', hostPoolName)
+output hostPoolId string = createHostPool ? hostPool!.outputs.hostPoolId : resourceId('Microsoft.DesktopVirtualization/hostPools', hostPoolName)
 output sessionHostNames array = sessionHostGeneration.outputs.sessionHostNames
 output sessionHostIds array = sessionHostGeneration.outputs.sessionHostIds
 output networkInterfaceIds array = sessionHostGeneration.outputs.networkInterfaceIds
